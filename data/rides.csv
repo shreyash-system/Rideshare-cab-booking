@@ -1,0 +1,9 @@
+﻿ride_id,rider_name,rider_phone,pickup,drop_location,cab_type,distance,fare,driver_name,vehicle_number,passenger_count,status,payment_method,scheduled_date,scheduled_time
+2,Shreyash & Shreyash,9172820415,Pune,ashik Road,Prime,205,3155,Sarvesh,MH14KB3206,2,Active,UPI,,
+4,Shreyash & Shreyash,9172820415,Narayangaon,Swargate,Mini,90,950,Chetan,MH14Gx5022,2,Active,UPI,,
+5,chetan,1478523698,vit college,bakul hall,Mini,2,70,Sarvesh,MH14KB3206,1,Active,Cash,,
+6,Shreyash & Shreyash,9172820415,VIT,Swargate,Mini,6,110,Chetan,MH14Gx5022,2,Active,UPI,,
+7,chetan & chetan,1478523698,Chintamani Nagar,Pune Station,SUV,20,500,Priya,MH10JK6543,2,Active,Cash,,
+8,Shreyash & Shreyash,9172820415,VIT,Swargate,Mini,6,110,Priya,MH10JK6543,2,Active,UPI,,
+9,Shreyash,9172820415,Pune,Nashik,Prime,214.41,3296.15,Sarvesh,MH14KB3206,1,Active,UPI,,
+10,Shreyash & Shreyash,9172820415,narayangaon,pune railway station,Prime,79,1265,Chetan,MH14Gx5022,2,Active,UPI,
