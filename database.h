@@ -1,400 +1,499 @@
 #ifndef DATABASE_H
 #define DATABASE_H
 
-#include <string>
-#include <vector>
-#include <tuple>
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <cstdlib>
 #include "user.h"
+#include <cstdlib>
+#include <iomanip>
+#include <iostream>
+#include <openssl/sha.h>
+#include <sqlite3.h>
+#include <sstream>
+#include <string>
+#include <tuple>
+#include <vector>
+
 using namespace std;
 
 class Database {
 private:
-    string usersFile = "data/users.csv";
-    string driversFile = "data/drivers.csv";
-    string ridesFile = "data/rides.csv";
+  sqlite3 *db;
+  string dbFile = "data/rideshare.db";
 
 public:
-    Database() {
-        // Create data directory if it doesn't exist
-        system("mkdir data 2>nul");
-        
-        // Initialize CSV files with headers if they don't exist
-        initializeFiles();
-        
-        cout << "[OK] Database initialized (CSV-based)!" << endl;
+  Database() {
+    system("mkdir data 2>nul");
+
+    int rc = sqlite3_open(dbFile.c_str(), &db);
+    if (rc) {
+      cerr << "[ERROR] Can't open database: " << sqlite3_errmsg(db) << endl;
+      exit(1);
     }
 
-    ~Database() {}
+    initializeTables();
+    cout << "[OK] Database initialized (SQLite-based)!" << endl;
+  }
+
+  ~Database() { sqlite3_close(db); }
 
 private:
-    void initializeFiles() {
-        // Initialize users.csv
-        ifstream testUsers(usersFile);
-        if (!testUsers.good()) {
-            ofstream file(usersFile);
-            file << "username,fullname,phone,emergency_contact,emergency_phone,payment_method\n";
-            file.close();
-        }
-        testUsers.close();
+  // SHA256 password hashing
+  string hashPassword(const string &password) {
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256((unsigned char *)password.c_str(), password.size(), hash);
+    stringstream ss;
+    for (unsigned char c : hash)
+      ss << hex << setw(2) << setfill('0') << (int)c;
+    return ss.str();
+  }
 
-        // Initialize drivers.csv
-        ifstream testDrivers(driversFile);
-        if (!testDrivers.good()) {
-            ofstream file(driversFile);
-            file << "id,name,phone,vehicle_number,cab_type\n";
-            file.close();
-        }
-        testDrivers.close();
+  void initializeTables() {
+    char *errMsg = nullptr;
 
-        // Initialize rides.csv
-        ifstream testRides(ridesFile);
-        if (!testRides.good()) {
-            ofstream file(ridesFile);
-            file << "ride_id,rider_name,rider_phone,pickup,drop_location,cab_type,distance,fare,driver_name,vehicle_number,passenger_count,status,payment_method,scheduled_date,scheduled_time\n";
-            file.close();
-        }
-        testRides.close();
+    // Create users table
+    const char *sqlUsers = "CREATE TABLE IF NOT EXISTS users ("
+                           "username TEXT PRIMARY KEY,"
+                           "fullname TEXT NOT NULL,"
+                           "password_hash TEXT NOT NULL,"
+                           "phone TEXT NOT NULL,"
+                           "emergency_contact TEXT,"
+                           "emergency_phone TEXT,"
+                           "payment_method TEXT DEFAULT 'Cash'"
+                           ");";
+
+    if (sqlite3_exec(db, sqlUsers, nullptr, nullptr, &errMsg) != SQLITE_OK) {
+      cerr << "[ERROR] SQL error (users): " << errMsg << endl;
+      sqlite3_free(errMsg);
     }
 
-    vector<string> split(const string& str, char delimiter) {
-        vector<string> tokens;
-        string token;
-        stringstream ss(str);
-        while (getline(ss, token, delimiter)) {
-            tokens.push_back(token);
-        }
-        return tokens;
+    // Create drivers table
+    const char *sqlDrivers = "CREATE TABLE IF NOT EXISTS drivers ("
+                             "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                             "name TEXT NOT NULL,"
+                             "phone TEXT NOT NULL,"
+                             "vehicle_number TEXT NOT NULL,"
+                             "cab_type TEXT NOT NULL"
+                             ");";
+
+    if (sqlite3_exec(db, sqlDrivers, nullptr, nullptr, &errMsg) != SQLITE_OK) {
+      cerr << "[ERROR] SQL error (drivers): " << errMsg << endl;
+      sqlite3_free(errMsg);
     }
+
+    // Create rides table
+    const char *sqlRides = "CREATE TABLE IF NOT EXISTS rides ("
+                           "ride_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                           "rider_name TEXT NOT NULL,"
+                           "rider_phone TEXT NOT NULL,"
+                           "pickup TEXT NOT NULL,"
+                           "drop_location TEXT NOT NULL,"
+                           "cab_type TEXT NOT NULL,"
+                           "distance REAL NOT NULL,"
+                           "fare REAL NOT NULL,"
+                           "driver_name TEXT NOT NULL,"
+                           "vehicle_number TEXT NOT NULL,"
+                           "passenger_count INTEGER NOT NULL,"
+                           "status TEXT NOT NULL,"
+                           "payment_method TEXT NOT NULL,"
+                           "scheduled_date TEXT,"
+                           "scheduled_time TEXT"
+                           ");";
+
+    if (sqlite3_exec(db, sqlRides, nullptr, nullptr, &errMsg) != SQLITE_OK) {
+      cerr << "[ERROR] SQL error (rides): " << errMsg << endl;
+      sqlite3_free(errMsg);
+    }
+  }
 
 public:
-    bool insertUser(string username, string fullname, string phone) {
-        ofstream file(usersFile, ios::app);
-        if (file.is_open()) {
-            file << username << "," << fullname << "," << phone << ",,,Cash\n";
-            file.close();
-            return true;
-        }
-        return false;
+  bool insertUser(string username, string fullname, string phone,
+                  string passwordPlain) {
+    string passwordHash = hashPassword(passwordPlain);
+
+    sqlite3_stmt *stmt;
+    const char *sql = "INSERT INTO users (username, fullname, password_hash, "
+                      "phone, payment_method) "
+                      "VALUES (?, ?, ?, ?, 'Cash');";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      cerr << "[ERROR] Failed to prepare statement: " << sqlite3_errmsg(db)
+           << endl;
+      return false;
     }
 
-    bool getUserByUsername(string username, string& fullname, string& phone, 
-                          string& emergencyContact, string& emergencyPhone, 
-                          string& paymentMethod) {
-        ifstream file(usersFile);
-        string line;
-        getline(file, line); // Skip header
-        
-        while (getline(file, line)) {
-            vector<string> fields = split(line, ',');
-            if (fields.size() >= 6 && fields[0] == username) {
-                fullname = fields[1];
-                phone = fields[2];
-                emergencyContact = fields[3];
-                emergencyPhone = fields[4];
-                paymentMethod = fields[5];
-                file.close();
-                return true;
-            }
-        }
-        file.close();
-        return false;
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, fullname.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, passwordHash.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, phone.c_str(), -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return rc == SQLITE_DONE;
+  }
+
+  bool checkUsernameExists(string username) {
+    sqlite3_stmt *stmt;
+    const char *sql = "SELECT COUNT(*) FROM users WHERE username = ?;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return false;
     }
 
-    bool updateUserEmergencyContact(string username, string ec, string ep) {
-        ifstream file(usersFile);
-        vector<string> lines;
-        string line;
-        
-        // Read all lines
-        while (getline(file, line)) {
-            lines.push_back(line);
-        }
-        file.close();
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_TRANSIENT);
 
-        // Update the user's emergency contact
-        ofstream outFile(usersFile);
-        for (size_t i = 0; i < lines.size(); i++) {
-            if (i == 0) {
-                outFile << lines[i] << "\n";
-                continue;
-            }
-            
-            vector<string> fields = split(lines[i], ',');
-            if (fields.size() >= 6 && fields[0] == username) {
-                fields[3] = ec;
-                fields[4] = ep;
-                outFile << fields[0] << "," << fields[1] << "," << fields[2] << "," 
-                        << fields[3] << "," << fields[4] << "," << fields[5] << "\n";
-            } else {
-                outFile << lines[i] << "\n";
-            }
-        }
-        outFile.close();
-        return true;
+    bool exists = false;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      exists = sqlite3_column_int(stmt, 0) > 0;
     }
 
-    bool updateUserPaymentMethod(string username, string pm) {
-        ifstream file(usersFile);
-        vector<string> lines;
-        string line;
-        
-        while (getline(file, line)) {
-            lines.push_back(line);
-        }
-        file.close();
+    sqlite3_finalize(stmt);
+    return exists;
+  }
 
-        ofstream outFile(usersFile);
-        for (size_t i = 0; i < lines.size(); i++) {
-            if (i == 0) {
-                outFile << lines[i] << "\n";
-                continue;
-            }
-            
-            vector<string> fields = split(lines[i], ',');
-            if (fields.size() >= 6 && fields[0] == username) {
-                fields[5] = pm;
-                outFile << fields[0] << "," << fields[1] << "," << fields[2] << "," 
-                        << fields[3] << "," << fields[4] << "," << fields[5] << "\n";
-            } else {
-                outFile << lines[i] << "\n";
-            }
-        }
-        outFile.close();
-        return true;
+  int getUserByUsername(string username, string password, string &fullname,
+                        string &phone, string &emergencyContact,
+                        string &emergencyPhone, string &paymentMethod) {
+    // returns:
+    // 1 = success
+    // 0 = user not found
+    // -1 = wrong password
+
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "SELECT fullname, password_hash, phone, emergency_contact, "
+        "emergency_phone, payment_method FROM users WHERE username = ?;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return 0;
     }
 
-    bool insertDriver(string name, string phone, string vehicleNumber, string cabType) {
-        // Get next ID
-        int nextId = 1;
-        ifstream readFile(driversFile);
-        string line;
-        getline(readFile, line); // Skip header
-        while (getline(readFile, line)) {
-            nextId++;
-        }
-        readFile.close();
+    sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_TRANSIENT);
 
-        ofstream file(driversFile, ios::app);
-        if (file.is_open()) {
-            file << nextId << "," << name << "," << phone << "," << vehicleNumber << "," << cabType << "\n";
-            file.close();
-            return true;
-        }
-        return false;
+    int result = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      string storedHash =
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+      string passwordHash = hashPassword(password);
+
+      if (storedHash != passwordHash) {
+        result = -1;
+      } else {
+        fullname = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+        phone = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
+
+        const unsigned char *ec = sqlite3_column_text(stmt, 3);
+        emergencyContact = ec ? reinterpret_cast<const char *>(ec) : "";
+
+        const unsigned char *ep = sqlite3_column_text(stmt, 4);
+        emergencyPhone = ep ? reinterpret_cast<const char *>(ep) : "";
+
+        const unsigned char *pm = sqlite3_column_text(stmt, 5);
+        paymentMethod = pm ? reinterpret_cast<const char *>(pm) : "Cash";
+
+        result = 1;
+      }
     }
 
-    vector<Driver> getAllDrivers() {
-        vector<Driver> drivers;
-        ifstream file(driversFile);
-        string line;
-        getline(file, line); // Skip header
-        
-        while (getline(file, line)) {
-            vector<string> fields = split(line, ',');
-            if (fields.size() >= 5) {
-                drivers.push_back(Driver(fields[1], fields[2], fields[3], fields[4]));
-            }
-        }
-        file.close();
-        return drivers;
+    sqlite3_finalize(stmt);
+    return result;
+  }
+
+  bool updateUserEmergencyContact(string username, string ec, string ep) {
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "UPDATE users SET emergency_contact = ?, emergency_phone = ? "
+        "WHERE username = ?;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return false;
     }
 
-    int insertRide(string riderName, string riderPhone, string pickup, string drop,
-                   string cabType, double distance, double fare, string driverName,
-                   string vehicleNumber, int passengerCount, string status,
-                   string paymentMethod, string scheduledDate, string scheduledTime) {
-        // Get next ride ID
-        int nextId = 1;
-        ifstream readFile(ridesFile);
-        string line;
-        getline(readFile, line); // Skip header
-        while (getline(readFile, line)) {
-            if (line.empty()) continue;
-            vector<string> fields = split(line, ',');
-            if (fields.size() > 0) {
-                try {
-                    int id = stoi(fields[0]);
-                    if (id >= nextId) nextId = id + 1;
-                } catch (...) {}
-            }
-        }
-        readFile.close();
+    sqlite3_bind_text(stmt, 1, ec.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, ep.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, username.c_str(), -1, SQLITE_TRANSIENT);
 
-        ofstream file(ridesFile, ios::app);
-        if (file.is_open()) {
-            file << nextId << "," << riderName << "," << riderPhone << "," << pickup << "," 
-                 << drop << "," << cabType << "," << distance << "," << fare << "," 
-                 << driverName << "," << vehicleNumber << "," << passengerCount << "," 
-                 << status << "," << paymentMethod << "," << scheduledDate << "," 
-                 << scheduledTime << "\n";
-            file.close();
-            return nextId;
-        }
-        return -1;
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return rc == SQLITE_DONE;
+  }
+
+  bool updateUserPaymentMethod(string username, string pm) {
+    sqlite3_stmt *stmt;
+    const char *sql = "UPDATE users SET payment_method = ? WHERE username = ?;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return false;
     }
 
-    vector<tuple<int, string, string, string, string, int, double>> getActiveRides() {
-        vector<tuple<int, string, string, string, string, int, double>> rides;
-        ifstream file(ridesFile);
-        string line;
-        
-        // Skip header
-        getline(file, line);
-        
-        // Read all rides
-        while (getline(file, line)) {
-            if (line.empty()) continue;
-            
-            vector<string> fields = split(line, ',');
-            
-            // Debug output
-            cout << "[DEBUG] Reading line: " << line << endl;
-            cout << "[DEBUG] Fields count: " << fields.size() << endl;
-            
-            if (fields.size() >= 12) {
-                try {
-                    string status = fields[11];
-                    cout << "[DEBUG] Status: '" << status << "'" << endl;
-                    
-                    if (status == "Active") {
-                        rides.push_back(make_tuple(
-                            stoi(fields[0]),  // ride_id
-                            fields[3],         // pickup
-                            fields[4],         // drop_location
-                            fields[5],         // cab_type
-                            fields[1],         // rider_name
-                            stoi(fields[10]),  // passenger_count
-                            stod(fields[7])    // fare
-                        ));
-                    }
-                } catch (...) {
-                    cout << "[DEBUG] Error parsing line" << endl;
-                }
-            }
-        }
-        file.close();
-        
-        cout << "[DEBUG] Total active rides found: " << rides.size() << endl;
-        return rides;
+    sqlite3_bind_text(stmt, 1, pm.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, username.c_str(), -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return rc == SQLITE_DONE;
+  }
+
+  bool insertDriver(string name, string phone, string vehicleNumber,
+                    string cabType) {
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "INSERT INTO drivers (name, phone, vehicle_number, cab_type) "
+        "VALUES (?, ?, ?, ?);";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return false;
     }
 
-    bool updateRideStatus(int rideID, string status) {
-        ifstream file(ridesFile);
-        vector<string> lines;
-        string line;
-        
-        while (getline(file, line)) {
-            lines.push_back(line);
-        }
-        file.close();
+    sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, phone.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, vehicleNumber.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, cabType.c_str(), -1, SQLITE_TRANSIENT);
 
-        ofstream outFile(ridesFile);
-        for (size_t i = 0; i < lines.size(); i++) {
-            if (i == 0) {
-                outFile << lines[i] << "\n";
-                continue;
-            }
-            
-            vector<string> fields = split(lines[i], ',');
-            if (fields.size() >= 12 && stoi(fields[0]) == rideID) {
-                fields[11] = status;
-                outFile << fields[0];
-                for (size_t j = 1; j < fields.size(); j++) {
-                    outFile << "," << fields[j];
-                }
-                outFile << "\n";
-            } else {
-                outFile << lines[i] << "\n";
-            }
-        }
-        outFile.close();
-        return true;
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return rc == SQLITE_DONE;
+  }
+
+  vector<Driver> getAllDrivers() {
+    vector<Driver> drivers;
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "SELECT name, phone, vehicle_number, cab_type FROM drivers;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return drivers;
     }
 
-    bool addPassengerToRide(int rideID, string newRiderName) {
-        ifstream file(ridesFile);
-        vector<string> lines;
-        string line;
-        
-        while (getline(file, line)) {
-            lines.push_back(line);
-        }
-        file.close();
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      string name =
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
+      string phone =
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1));
+      string vehicle =
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2));
+      string cabType =
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3));
 
-        ofstream outFile(ridesFile);
-        for (size_t i = 0; i < lines.size(); i++) {
-            if (i == 0) {
-                outFile << lines[i] << "\n";
-                continue;
-            }
-            
-            vector<string> fields = split(lines[i], ',');
-            if (fields.size() >= 12 && stoi(fields[0]) == rideID) {
-                fields[1] = fields[1] + " & " + newRiderName;
-                fields[10] = to_string(stoi(fields[10]) + 1);
-                outFile << fields[0];
-                for (size_t j = 1; j < fields.size(); j++) {
-                    outFile << "," << fields[j];
-                }
-                outFile << "\n";
-            } else {
-                outFile << lines[i] << "\n";
-            }
-        }
-        outFile.close();
-        return true;
+      drivers.push_back(Driver(name, phone, vehicle, cabType));
     }
 
-    vector<tuple<int, string, string, string, double, int, double, string>> getRidesByPhone(string phone) {
-        vector<tuple<int, string, string, string, double, int, double, string>> rides;
-        ifstream file(ridesFile);
-        string line;
-        getline(file, line); // Skip header
-        
-        while (getline(file, line)) {
-            if (line.empty()) continue;
-            
-            vector<string> fields = split(line, ',');
-            if (fields.size() >= 15 && fields[2] == phone) {
-                rides.push_back(make_tuple(
-                    stoi(fields[0]),   // ride_id
-                    fields[3],          // pickup
-                    fields[4],          // drop_location
-                    fields[5],          // cab_type
-                    stod(fields[6]),    // distance
-                    stoi(fields[10]),   // passenger_count
-                    stod(fields[7]),    // fare
-                    fields[11]          // status
-                ));
-            }
-        }
-        file.close();
-        return rides;
+    sqlite3_finalize(stmt);
+    return drivers;
+  }
+
+  int insertRide(string riderName, string riderPhone, string pickup,
+                 string drop, string cabType, double distance, double fare,
+                 string driverName, string vehicleNumber, int passengerCount,
+                 string status, string paymentMethod, string scheduledDate,
+                 string scheduledTime) {
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "INSERT INTO rides (rider_name, rider_phone, pickup, drop_location, "
+        "cab_type, distance, fare, driver_name, vehicle_number, "
+        "passenger_count, status, payment_method, scheduled_date, "
+        "scheduled_time) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return -1;
     }
 
-    double getFarePerPerson(int rideID) {
-        ifstream file(ridesFile);
-        string line;
-        getline(file, line); // Skip header
-        
-        while (getline(file, line)) {
-            if (line.empty()) continue;
-            
-            vector<string> fields = split(line, ',');
-            if (fields.size() >= 12 && stoi(fields[0]) == rideID) {
-                double fare = stod(fields[7]);
-                int count = stoi(fields[10]);
-                file.close();
-                return fare / count;
-            }
-        }
-        file.close();
-        return 0.0;
+    sqlite3_bind_text(stmt, 1, riderName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, riderPhone.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, pickup.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, drop.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, cabType.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_double(stmt, 6, distance);
+    sqlite3_bind_double(stmt, 7, fare);
+    sqlite3_bind_text(stmt, 8, driverName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 9, vehicleNumber.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 10, passengerCount);
+    sqlite3_bind_text(stmt, 11, status.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 12, paymentMethod.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 13, scheduledDate.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 14, scheduledTime.c_str(), -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    int rideId = -1;
+
+    if (rc == SQLITE_DONE) {
+      rideId = sqlite3_last_insert_rowid(db);
     }
+
+    sqlite3_finalize(stmt);
+    return rideId;
+  }
+
+  vector<tuple<int, string, string, string, string, int, double>>
+  getActiveRides() {
+    vector<tuple<int, string, string, string, string, int, double>> rides;
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "SELECT ride_id, pickup, drop_location, cab_type, rider_name, "
+        "passenger_count, fare FROM rides WHERE status = 'Active';";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return rides;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      rides.push_back(make_tuple(
+          sqlite3_column_int(stmt, 0),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1)),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2)),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3)),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 4)),
+          sqlite3_column_int(stmt, 5), sqlite3_column_double(stmt, 6)));
+    }
+
+    sqlite3_finalize(stmt);
+    cout << "[DEBUG] Total active rides found: " << rides.size() << endl;
+    return rides;
+  }
+
+  bool updateRideStatus(int rideID, string status) {
+    sqlite3_stmt *stmt;
+    const char *sql = "UPDATE rides SET status = ? WHERE ride_id = ?;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, status.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 2, rideID);
+
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return rc == SQLITE_DONE;
+  }
+
+  bool addPassengerToRide(int rideID, string newRiderName) {
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "UPDATE rides SET rider_name = rider_name || ' & ' || ?, "
+        "passenger_count = passenger_count + 1 WHERE ride_id = ?;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, newRiderName.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 2, rideID);
+
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return rc == SQLITE_DONE;
+  }
+
+  vector<tuple<int, string, string, string, double, int, double, string>>
+  getRidesByPhone(string phone) {
+    vector<tuple<int, string, string, string, double, int, double, string>>
+        rides;
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "SELECT ride_id, pickup, drop_location, cab_type, distance, "
+        "passenger_count, fare, status FROM rides WHERE rider_phone = ?;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return rides;
+    }
+
+    sqlite3_bind_text(stmt, 1, phone.c_str(), -1, SQLITE_TRANSIENT);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      rides.push_back(make_tuple(
+          sqlite3_column_int(stmt, 0),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 1)),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 2)),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 3)),
+          sqlite3_column_double(stmt, 4), sqlite3_column_int(stmt, 5),
+          sqlite3_column_double(stmt, 6),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt, 7))));
+    }
+
+    sqlite3_finalize(stmt);
+    return rides;
+  }
+
+  vector<tuple<int, string, string, string, double, int, double, string>>
+  getRidesByUsername(string username) {
+    vector<tuple<int, string, string, string, double, int, double, string>>
+        rides;
+
+    // First, get the phone number for this username
+    sqlite3_stmt *stmt1;
+    const char *sql1 = "SELECT phone FROM users WHERE username = ?;";
+
+    if (sqlite3_prepare_v2(db, sql1, -1, &stmt1, nullptr) != SQLITE_OK) {
+      return rides;
+    }
+
+    sqlite3_bind_text(stmt1, 1, username.c_str(), -1, SQLITE_TRANSIENT);
+
+    string phone = "";
+    if (sqlite3_step(stmt1) == SQLITE_ROW) {
+      phone = reinterpret_cast<const char *>(sqlite3_column_text(stmt1, 0));
+    }
+    sqlite3_finalize(stmt1);
+
+    // If no phone found, return empty vector
+    if (phone.empty()) {
+      return rides;
+    }
+
+    // Now get rides for this phone number
+    sqlite3_stmt *stmt2;
+    const char *sql2 =
+        "SELECT ride_id, pickup, drop_location, cab_type, distance, "
+        "passenger_count, fare, status FROM rides WHERE rider_phone = ?;";
+
+    if (sqlite3_prepare_v2(db, sql2, -1, &stmt2, nullptr) != SQLITE_OK) {
+      return rides;
+    }
+
+    sqlite3_bind_text(stmt2, 1, phone.c_str(), -1, SQLITE_TRANSIENT);
+
+    while (sqlite3_step(stmt2) == SQLITE_ROW) {
+      rides.push_back(make_tuple(
+          sqlite3_column_int(stmt2, 0),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt2, 1)),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt2, 2)),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt2, 3)),
+          sqlite3_column_double(stmt2, 4), sqlite3_column_int(stmt2, 5),
+          sqlite3_column_double(stmt2, 6),
+          reinterpret_cast<const char *>(sqlite3_column_text(stmt2, 7))));
+    }
+
+    sqlite3_finalize(stmt2);
+    return rides;
+  }
+
+  double getFarePerPerson(int rideID) {
+    sqlite3_stmt *stmt;
+    const char *sql =
+        "SELECT fare, passenger_count FROM rides WHERE ride_id = ?;";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+      return 0.0;
+    }
+
+    sqlite3_bind_int(stmt, 1, rideID);
+
+    double farePerPerson = 0.0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+      double fare = sqlite3_column_double(stmt, 0);
+      int count = sqlite3_column_int(stmt, 1);
+      farePerPerson = fare / count;
+    }
+
+    sqlite3_finalize(stmt);
+    return farePerPerson;
+  }
 };
 
 #endif

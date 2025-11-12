@@ -127,26 +127,39 @@ public:
         printSpacer(2);
     }
 
-    static void waitForEnter() {
+    static void waitForEnter(bool wait = true) {
         cout << "\n  Press Enter to continue...";
-        cin.ignore();
+        if (wait) cin.ignore();
         cin.get();
     }
 
     static void printRideCard(int id, string pickup, string drop, string cabType, int passengers, double fare) {
+        // Truncate strings if they're too long
+        const int MAX_LOCATION_WIDTH = 54;
+        const int MAX_CABTYPE_WIDTH = 14;
+        
+        if (pickup.length() > MAX_LOCATION_WIDTH) {
+            pickup = pickup.substr(0, MAX_LOCATION_WIDTH - 3) + "...";
+        }
+        if (drop.length() > MAX_LOCATION_WIDTH) {
+            drop = drop.substr(0, MAX_LOCATION_WIDTH - 3) + "...";
+        }
+        if (cabType.length() > MAX_CABTYPE_WIDTH) {
+            cabType = cabType.substr(0, MAX_CABTYPE_WIDTH - 3) + "...";
+        }
+        
         cout << "\n";
         cout << "  +----------------------------------------------------------------+" << endl;
-        cout << "  | Ride ID: " << left << setw(55) << id << "|" << endl;
+        cout << "  | Ride ID: " << left << setw(55) << id << endl;
         cout << "  |----------------------------------------------------------------|" << endl;
-        cout << "  |  From:  " << left << setw(54) << pickup << "|" << endl;
-        cout << "  |  To:    " << left << setw(54) << drop << "|" << endl;
+        cout << "  |  From:  " << left << setw(MAX_LOCATION_WIDTH) << pickup << endl;
+        cout << "  |  To:    " << left << setw(MAX_LOCATION_WIDTH) << drop << endl;
         cout << "  |----------------------------------------------------------------|" << endl;
-        cout << "  |  Cab Type: " << left << setw(14) << cabType;
-        cout << "  Passengers: " << left << setw(14) << passengers;
-        cout << "  Fare: Rs." << left << setw(8) << fare << " |" << endl;
+        cout << "  |  Cab Type: " << left << setw(MAX_CABTYPE_WIDTH) << cabType;
+        cout << "  Passengers: " << left << setw(2) << passengers;
+        cout << "  Fare: Rs." << fixed << setprecision(2) << setw(10) << fare << " |" << endl;
         cout << "  +----------------------------------------------------------------+" << endl;
     }
-
     static void printProfileCard(string username, string name, string phone, string payment) {
         cout << "\n";
         cout << "  +----------------------------------+" << endl;
