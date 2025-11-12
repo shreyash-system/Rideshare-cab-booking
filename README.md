@@ -3,7 +3,7 @@ RideShare is a fully-featured command-line cab booking and ride management syste
 
 ## Command to compile:
 ```bash
- g++ -std=c++11 main.cpp -o main -lcurl -lssl -lcrypto -lcurl -pthread -lsqlite3 -lssl -lcrypto && ./main 
+ g++ -std=c++11 main.cpp -o main.exe -lcurl -lssl -lcrypto -lcurl -pthread -lsqlite3 -lssl -lcrypto && ./main.exe
  ``````
 
 ## Overview
